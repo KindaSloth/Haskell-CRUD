@@ -1,11 +1,10 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Lib
-  ( startApp,
-    app,
-  )
+  ( startApp )
 where
 
 import Control.Concurrent
@@ -21,52 +20,70 @@ import Network.Wai
 import Network.Wai.Handler.Warp
 import Servant
 import Servant.Client
+import Database.PostgreSQL.Simple.FromRow
+
+localPg :: ConnectInfo 
+localPg = defaultConnectInfo 
+        {
+          connectHost     = "localhost",
+          connectDatabase = "postgres",
+          connectUser     = "postgres",
+          connectPassword = "postgres"
+        }
 
 data User = User
-  { userId :: Int,
-    userFirstName :: String,
-    userLastName :: String
+  { 
+    id :: Int,
+    name :: String
   }
   deriving (Eq, Show)
 
-data Product = Product
-  { productId :: Int,
-    productName :: String,
-    productDescription :: String
-  }
-  deriving (Eq, Show)
+instance FromRow User where
+  fromRow = User <$> field <*> field
+
+-- data Product = Product
+--   { 
+--     productId :: Int,
+--     productName :: String,
+--     productDescription :: String
+--   }
+--   deriving (Eq, Show)
 
 $(deriveJSON defaultOptions ''User)
-$(deriveJSON defaultOptions ''Product)
+-- $(deriveJSON defaultOptions ''Product)
 
-type API =
-  "users" :> Get '[JSON] [User]
-    :<|> "products" :> Get '[JSON] [Product]
-    :<|> "postUser" :> ReqBody '[JSON] User :> Post '[JSON] User
+type API = "getUsers" :> Get '[JSON] [User]
+
+-- type API =
+--   "getUsers" :> Get '[JSON] [User]
+--     :<|> "products" :> Get '[JSON] [Product]
+--     :<|> "postUser" :> ReqBody '[JSON] User :> Post '[JSON] User
 
 startApp :: IO ()
-startApp = run 8080 app
-
-app :: Application
-app = serve api server
+startApp = do
+  conn <- connect localPg
+  run 8080 $ serve api $ server conn
 
 api :: Proxy API
 api = Proxy
 
-server :: Server API
-server = return users :<|> return products :<|> postUser
+server :: Connection -> Server API
+server = getUsers
 
-users :: [User]
-users =
-  [ User 1 "Isaac" "Newton",
-    User 2 "Albert" "Einstein"
-  ]
+getUsers :: Connection -> Handler [User]
+getUsers conn = liftIO $ query conn "SELECT * FROM \"user\"" ()
 
-products :: [Product]
-products =
-  [ Product 1 "Produto 1" "descrição bala",
-    Product 2 "Produto 2" "descrição bala"
-  ]
+-- users :: [User]
+-- users =
+--   [ User 1 "Isaac" "Newton",
+--     User 2 "Albert" "Einstein"
+--   ]
 
-postUser :: User -> Handler User
-postUser user = return user
+-- products :: [Product]
+-- products =
+--   [ Product 1 "Produto 1" "descrição bala",
+--     Product 2 "Produto 2" "descrição bala"
+--   ]
+
+-- postUser :: User -> Handler User
+-- postUser = pure
