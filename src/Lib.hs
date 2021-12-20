@@ -1,39 +1,43 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 
-module Lib
-  ( startApp )
-where
+module Lib (startApp) where
 
 import Control.Concurrent
-import Control.Exception (bracket)
+import Control.Exception (bracket, handleJust, throwIO, try)
 import Control.Monad.IO.Class
 import Data.Aeson
 import Data.Aeson.TH
 import Data.ByteString (ByteString)
 import Data.Pool
+import Data.Text (unpack)
+import Data.Text.Encoding (decodeUtf8)
 import Database.PostgreSQL.Simple
+import Database.PostgreSQL.Simple.Errors
+import Database.PostgreSQL.Simple.FromRow
+import GHC.Exception
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.Wai
 import Network.Wai.Handler.Warp
+import Network.Wai.Middleware.Servant.Errors (errorMw)
 import Servant
 import Servant.Client
-import Database.PostgreSQL.Simple.FromRow
 
-localPg :: ConnectInfo 
-localPg = defaultConnectInfo 
-        {
-          connectHost     = "localhost",
-          connectDatabase = "postgres",
-          connectUser     = "postgres",
-          connectPassword = "postgres"
-        }
+localPg :: ConnectInfo
+localPg =
+  defaultConnectInfo
+    { connectHost = "localhost",
+      connectDatabase = "postgres",
+      connectUser = "postgres",
+      connectPassword = "postgres"
+    }
 
 data User = User
-  { 
-    id :: Int,
+  { id :: Int,
     name :: String
   }
   deriving (Eq, Show)
@@ -41,49 +45,55 @@ data User = User
 instance FromRow User where
   fromRow = User <$> field <*> field
 
--- data Product = Product
---   { 
---     productId :: Int,
---     productName :: String,
---     productDescription :: String
---   }
---   deriving (Eq, Show)
+data Product = Product
+  { productId :: Int,
+    productName :: String,
+    description :: String,
+    userId :: Int
+  }
+  deriving (Eq, Show)
+
+instance FromRow Product where
+  fromRow = Product <$> field <*> field <*> field <*> field
+
+newtype Message = Message {message :: String} deriving (Eq, Show)
 
 $(deriveJSON defaultOptions ''User)
--- $(deriveJSON defaultOptions ''Product)
+$(deriveJSON defaultOptions ''Product)
+$(deriveJSON defaultOptions ''Message)
 
-type API = "getUsers" :> Get '[JSON] [User]
-
--- type API =
---   "getUsers" :> Get '[JSON] [User]
---     :<|> "products" :> Get '[JSON] [Product]
---     :<|> "postUser" :> ReqBody '[JSON] User :> Post '[JSON] User
+type API =
+  "getUsers" :> Get '[JSON] [User]
+    :<|> "createUser" :> ReqBody '[JSON] User :> Post '[JSON] Message
 
 startApp :: IO ()
 startApp = do
   conn <- connect localPg
-  run 8080 $ serve api $ server conn
+  run 8080 $ errorMw @JSON @["error", "status"] $ serve api $ server conn
 
 api :: Proxy API
 api = Proxy
 
 server :: Connection -> Server API
-server = getUsers
+server conn = getUsers conn :<|> createUser conn
 
 getUsers :: Connection -> Handler [User]
 getUsers conn = liftIO $ query conn "SELECT * FROM \"user\"" ()
 
--- users :: [User]
--- users =
---   [ User 1 "Isaac" "Newton",
---     User 2 "Albert" "Einstein"
---   ]
+createUser :: Connection -> User -> Handler Message
+createUser conn (User id name) = do
+  query <-
+    liftIO $
+      catchViolation catcher $
+        execute conn "INSERT INTO \"user\" (id, name) VALUES (?, ?)" (id, name)
+          >> successMessage "User created with success!"
+  case query of
+    Right x -> pure x
+    Left _ -> throwError $ err400 {errBody = "Bad Request :("}
 
--- products :: [Product]
--- products =
---   [ Product 1 "Produto 1" "descrição bala",
---     Product 2 "Produto 2" "descrição bala"
---   ]
+catcher :: forall e b. Exception e => e -> ConstraintViolation -> IO (Either ByteString b)
+catcher _ (UniqueViolation e) = pure $ Left e
+catcher e _ = throwIO e
 
--- postUser :: User -> Handler User
--- postUser = pure
+successMessage :: String -> IO (Either ByteString Message)
+successMessage s = pure $ Right $ Message s

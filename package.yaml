@@ -24,6 +24,7 @@ dependencies:
 - servant
 - servant-server
 - servant-client
+- servant-errors
 - wai >= 3.2
 - warp >= 3.2
 - bytestring >= 0.10
