@@ -45,6 +45,8 @@ data User = User
 instance FromRow User where
   fromRow = User <$> field <*> field
 
+newtype UserUpdate = UserUpdate { newName :: String } deriving(Eq, Show)
+
 data Product = Product
   { productId :: Int,
     productName :: String,
@@ -59,12 +61,14 @@ instance FromRow Product where
 newtype Message = Message {message :: String} deriving (Eq, Show)
 
 $(deriveJSON defaultOptions ''User)
+$(deriveJSON defaultOptions ''UserUpdate)
 $(deriveJSON defaultOptions ''Product)
 $(deriveJSON defaultOptions ''Message)
 
 type API =
   "getUsers" :> Get '[JSON] [User]
     :<|> "createUser" :> ReqBody '[JSON] User :> Post '[JSON] Message
+    :<|> "updateUser" :> QueryParam "id" Int :> ReqBody '[JSON] UserUpdate :> Put '[JSON] Message
 
 startApp :: IO ()
 startApp = do
@@ -75,7 +79,7 @@ api :: Proxy API
 api = Proxy
 
 server :: Connection -> Server API
-server conn = getUsers conn :<|> createUser conn
+server conn = getUsers conn :<|> createUser conn :<|> updateUser conn
 
 getUsers :: Connection -> Handler [User]
 getUsers conn = liftIO $ query conn "SELECT * FROM \"user\"" ()
@@ -87,6 +91,17 @@ createUser conn (User id name) = do
       catchViolation catcher $
         execute conn "INSERT INTO \"user\" (id, name) VALUES (?, ?)" (id, name)
           >> successMessage "User created with success!"
+  case query of
+    Right x -> pure x
+    Left _ -> throwError $ err400 {errBody = "Bad Request :("}
+
+updateUser :: Connection -> Maybe Int -> UserUpdate -> Handler Message
+updateUser conn id (UserUpdate name) = do
+  query <-
+    liftIO $
+      catchViolation catcher $
+        execute conn "UPDATE \"user\" SET name = ? WHERE id = ?" (name, id)
+          >> successMessage "User updated with success!"
   case query of
     Right x -> pure x
     Left _ -> throwError $ err400 {errBody = "Bad Request :("}
